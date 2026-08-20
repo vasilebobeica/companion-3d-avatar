@@ -70,7 +70,6 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-    // === Scene ===
     const container = document.getElementById('canvas-container');
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0f0f1a);
@@ -96,7 +95,6 @@
     fill.position.set(-2, 1, -1);
     scene.add(fill);
 
-    // Ground
     const ground = new THREE.Mesh(
       new THREE.CircleGeometry(4, 64),
       new THREE.MeshStandardMaterial({ color: 0x151520, roughness: 0.9 })
@@ -104,7 +102,6 @@
     ground.rotation.x = -Math.PI / 2;
     scene.add(ground);
 
-    // === Avatar container ===
     const avatarRoot = new THREE.Group();
     scene.add(avatarRoot);
 
@@ -114,7 +111,6 @@
     let talkTimer = 0;
     let proceduralMode = true;
 
-    // Procedural fallback
     function createProcedural() {
       proceduralMode = true;
       while (avatarRoot.children.length) avatarRoot.remove(avatarRoot.children[0]);
@@ -155,7 +151,6 @@
 
     createProcedural();
 
-    // === Load real animated model ===
     const loader = new GLTFLoader();
 
     function loadModel(urlOrFile) {
@@ -174,7 +169,7 @@
         box.setFromObject(model);
         const center = box.getCenter(new THREE.Vector3());
         model.position.sub(center);
-        model.position.y = -box.min.y; // feet on ground approx
+        model.position.y = -box.min.y;
 
         avatarRoot.add(model);
 
@@ -183,9 +178,11 @@
           let idleClip = gltf.animations.find(c => /idle|stand|a_pose|breathing|wait/i.test(c.name)) || gltf.animations[0];
           const action = mixer.clipAction(idleClip);
           action.play();
+          useProceduralIdle = false;
           document.getElementById('status').textContent = `Loaded with ${gltf.animations.length} animation(s). Playing: ${idleClip.name}`;
         } else {
-          document.getElementById('status').textContent = 'Model loaded (no animations found). Using procedural talk bob.';
+          setupProceduralIdle(model);
+          document.getElementById('status').textContent = 'Model loaded (no clips). Pure Three.js procedural idle active.';
         }
       }, undefined, (err) => {
         console.error(err);
@@ -203,9 +200,9 @@
 
     document.getElementById('resetModel').addEventListener('click', () => {
       createProcedural();
+      setupProceduralIdle(avatarRoot);
     });
 
-    // === Chat ===
     let affection = 10;
     const messagesEl = document.getElementById('messages');
     const input = document.getElementById('input');
@@ -290,29 +287,90 @@
 
     addMsg("*waves gently* Hi... I'm Luna. Talk to me and I'll get closer to you. Load a real model above if you want!", 'luna');
 
-    // === Animate ===
+    // === Pure Three.js Procedural Idle ===
+    let idleBones = {};
+    let idleOriginals = {};
+    let useProceduralIdle = true;
+
+    function setupProceduralIdle(root) {
+      idleBones = {};
+      idleOriginals = {};
+      root.traverse(obj => {
+        if (obj.isBone) {
+          const name = obj.name.toLowerCase();
+          if ((name.includes('hips') || name.includes('pelvis') || name.includes('root') || name === 'hip') && !idleBones.hips) idleBones.hips = obj;
+          if ((name.includes('spine') || name.includes('chest') || name.includes('torso')) && !idleBones.spine) idleBones.spine = obj;
+          if ((name.includes('neck')) && !idleBones.neck) idleBones.neck = obj;
+          if ((name.includes('head') && !name.includes('end') && !name.includes('top')) && !idleBones.head) idleBones.head = obj;
+          if ((name.includes('leftarm') || name.includes('left_arm') || name.includes('l_upperarm') || name.includes('upperarm_l') || name.includes('arm_l')) && !idleBones.leftArm) idleBones.leftArm = obj;
+          if ((name.includes('rightarm') || name.includes('right_arm') || name.includes('r_upperarm') || name.includes('upperarm_r') || name.includes('arm_r')) && !idleBones.rightArm) idleBones.rightArm = obj;
+        }
+      });
+
+      Object.keys(idleBones).forEach(key => {
+        idleOriginals[key] = {
+          rot: idleBones[key].rotation.clone(),
+          pos: idleBones[key].position.clone()
+        };
+      });
+
+      useProceduralIdle = true;
+      console.log('Procedural idle bones found:', Object.keys(idleBones));
+    }
+
+    function updateProceduralIdle(t) {
+      if (!useProceduralIdle) return;
+
+      avatarRoot.rotation.y = Math.sin(t * 0.55) * 0.05;
+      avatarRoot.position.y = Math.sin(t * 1.35) * 0.012;
+
+      if (idleBones.hips) {
+        idleBones.hips.rotation.y = idleOriginals.hips.rot.y + Math.sin(t * 0.5) * 0.025;
+        idleBones.hips.position.y = idleOriginals.hips.pos.y + Math.sin(t * 1.6) * 0.006;
+      }
+
+      if (idleBones.spine) {
+        idleBones.spine.rotation.x = idleOriginals.spine.rot.x + Math.sin(t * 1.5) * 0.025;
+      }
+
+      if (idleBones.neck) {
+        idleBones.neck.rotation.x = idleOriginals.neck.rot.x + Math.sin(t * 1.1) * 0.02;
+      }
+
+      if (idleBones.head) {
+        idleBones.head.rotation.y = idleOriginals.head.rot.y + Math.sin(t * 0.35) * 0.07;
+        idleBones.head.rotation.x = idleOriginals.head.rot.x + Math.sin(t * 0.8) * 0.03;
+      }
+
+      if (idleBones.leftArm) {
+        idleBones.leftArm.rotation.z = idleOriginals.leftArm.rot.z + 0.12 + Math.sin(t * 0.85) * 0.04;
+        idleBones.leftArm.rotation.x = idleOriginals.leftArm.rot.x + Math.sin(t * 1.05) * 0.03;
+      }
+      if (idleBones.rightArm) {
+        idleBones.rightArm.rotation.z = idleOriginals.rightArm.rot.z - 0.12 - Math.sin(t * 0.85 + 0.4) * 0.04;
+        idleBones.rightArm.rotation.x = idleOriginals.rightArm.rot.x + Math.sin(t * 1.05 + 0.3) * 0.03;
+      }
+    }
+
+    setupProceduralIdle(avatarRoot);
+
     function animate() {
       requestAnimationFrame(animate);
       const delta = clock.getDelta();
       const t = clock.elapsedTime;
 
-      if (mixer) mixer.update(delta);
+      if (mixer) {
+        mixer.update(delta);
+      } else {
+        updateProceduralIdle(t);
+      }
 
-      if (proceduralMode) {
-        avatarRoot.rotation.y = Math.sin(t * 0.5) * 0.08;
-        avatarRoot.position.y = Math.sin(t * 1.2) * 0.015;
-
+      if (proceduralMode && (isTalking || talkTimer > 0)) {
         const head = avatarRoot.getObjectByName('head');
         if (head) {
-          if (isTalking || talkTimer > 0) {
-            head.position.y = 1.55 + Math.sin(t * 14) * 0.012;
-            talkTimer -= delta;
-          } else {
-            head.position.y = THREE.MathUtils.lerp(head.position.y, 1.55, 0.1);
-          }
+          head.position.y = 1.55 + Math.sin(t * 14) * 0.012;
+          talkTimer -= delta;
         }
-      } else {
-        avatarRoot.rotation.y = Math.sin(t * 0.4) * 0.04;
       }
 
       controls.update();
